@@ -1,0 +1,1409 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vehicle Security Dashboard</title>
+  <meta name="description" content="Real-time vehicle security monitoring via ESP32 + HiveMQ MQTT.">
+
+  <!-- MQTT.js CDN -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- Leaflet.js + OpenStreetMap -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <!-- SheetJS untuk export Excel -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 0 24px;
+      font-family: 'Inter', Arial, sans-serif;
+      background: #f0f7f3;
+      color: #102016;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 22px 0 34px;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #0f8a4b 0%, #075c33 100%);
+      color: white;
+      padding: 20px 24px;
+      border-radius: 18px;
+      margin-bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .header h1 { margin: 0; font-size: 1.5rem; font-weight: 700; }
+    .header p  { margin: 4px 0 0; font-size: 0.85rem; opacity: 0.85; }
+
+    /* ── MQTT Status Badge ── */
+    .mqtt-status-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .mqtt-badge {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      transition: background 0.3s, color 0.3s;
+    }
+    .mqtt-badge.connecting { background: rgba(255,255,255,0.15); color: #fff; }
+    .mqtt-badge.connected  { background: rgba(111,255,169,0.25); color: #6fffa9; }
+    .mqtt-badge.reconnecting { background: rgba(255,200,50,0.25); color: #ffe082; }
+    .mqtt-badge.error      { background: rgba(255,80,80,0.25);  color: #fca5a5; }
+
+    .status-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .status-dot.blink {
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.2; }
+    }
+    .msg-counter {
+      font-size: 0.75rem;
+      opacity: 0.8;
+      background: rgba(255,255,255,0.12);
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+
+    /* ── Section label ── */
+    .section-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: #607065;
+      margin: 20px 0 9px;
+    }
+    .overview-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(380px, 0.9fr);
+      gap: 28px;
+      align-items: start;
+    }
+    .overview-layout > * {
+      min-width: 0;
+    }
+    .overview-layout .section-label:first-child {
+      margin-top: 0;
+    }
+    .status-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .realtime-panel .chart-grid {
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+    /* ── Card grid ── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: white;
+      padding: 13px 14px;
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+      transition: transform 0.18s, box-shadow 0.18s;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+    }
+    .card h3 {
+      margin: 0 0 6px;
+      color: #607065;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #0f8a4b;
+      line-height: 1.1;
+    }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .badge-green  { background: #dcfce7; color: #166534; }
+    .badge-red    { background: #fee2e2; color: #991b1b; }
+    .badge-blue   { background: #dbeafe; color: #1e40af; }
+    .badge-gray   { background: #f3f4f6; color: #374151; }
+    .badge-orange { background: #ffedd5; color: #9a3412; }
+    .badge-yellow { background: #fef9c3; color: #713f12; }
+
+    /* ── GPS Map ── */
+    .map-card {
+      background: white;
+      padding: 18px;
+      border-radius: 16px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+    }
+    .map-card h2 {
+      margin: 0 0 6px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #102016;
+    }
+    .map-card p {
+      margin: 0 0 12px;
+      font-size: 0.85rem;
+      color: #607065;
+    }
+    #leafletMap {
+      width: 100%;
+      height: 320px;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    /* ── Remote Control ── */
+    .rc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 14px;
+    }
+    .rc-group {
+      background: white;
+      border-radius: 14px;
+      padding: 15px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+    }
+    .rc-group h4 {
+      margin: 0 0 9px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #607065;
+    }
+    .rc-btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+    .btn-cmd {
+      flex: 1 1 auto;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.12s;
+    }
+    .btn-cmd:hover  { opacity: 0.88; transform: translateY(-1px); }
+    .btn-cmd:active { opacity: 1;   transform: translateY(0); }
+    .btn-cmd:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-green  { background: #0f8a4b; color: white; }
+    .btn-red    { background: #dc2626; color: white; }
+    .btn-blue   { background: #2563eb; color: white; }
+    .btn-orange { background: #ea580c; color: white; }
+    .btn-gray   { background: #6b7280; color: white; }
+    .btn-yellow { background: #d97706; color: white; }
+    .relay-safety-status {
+      min-height: 18px;
+      margin-top: 6px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #991b1b;
+      font-weight: 600;
+    }
+
+    /* ── Chart section ── */
+    .data-log-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      background: white;
+      padding: 16px 18px;
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+    }
+    .data-log-card h3 {
+      margin: 0 0 4px;
+      font-size: 14px;
+      color: #102016;
+    }
+    .data-log-card p {
+      margin: 0;
+      font-size: 12px;
+      color: #607065;
+    }
+    .data-log-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .btn-log {
+      padding: 9px 13px;
+      border: none;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: white;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.12s;
+    }
+    .btn-log:hover { opacity: 0.88; transform: translateY(-1px); }
+    .btn-log:active { opacity: 1; transform: translateY(0); }
+
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 16px;
+    }
+    .chart-card {
+      background: white;
+      padding: 15px;
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.07);
+    }
+    .chart-card h3 {
+      margin: 0 0 10px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: #102016;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .chart-wrap { position: relative; height: 150px; }
+
+    /* ── Command feedback toast ── */
+    #toast {
+      position: fixed;
+      bottom: 28px;
+      right: 24px;
+      background: #0f8a4b;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.25s, transform 0.25s;
+      pointer-events: none;
+      z-index: 999;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin-top: 24px;
+    }
+
+    @media (max-width: 960px) {
+      .overview-layout {
+        grid-template-columns: 1fr;
+      }
+      .realtime-panel .section-label {
+        margin-top: 20px;
+      }
+      .realtime-panel .chart-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 720px) {
+      body {
+        padding: 0 14px;
+      }
+      .container {
+        padding: 16px 0 24px;
+      }
+      .realtime-panel .chart-grid {
+        grid-template-columns: 1fr;
+      }
+      .status-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 440px) {
+      .status-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+<div class="container">
+
+  <!-- ═══ HEADER ═══ -->
+  <div class="header">
+    <div>
+      <h1>Vehicle Security Dashboard</h1>
+      <p>Real-time via ESP32 + HiveMQ MQTT</p>
+    </div>
+    <div class="mqtt-status-bar">
+      <div class="mqtt-badge connecting" id="mqttBadge">
+        <span class="status-dot blink" id="statusDot"></span>
+        <span id="mqttStatusText">Connecting…</span>
+      </div>
+      <span class="msg-counter" id="msgCounter">0 pesan</span>
+    </div>
+  </div>
+
+  <div class="overview-layout">
+    <div class="left-panel">
+      <!-- GPS MAP -->
+      <div class="section-label">Lokasi GPS</div>
+      <div class="map-card">
+        <h2>GPS Location</h2>
+        <p id="gpsText">Menunggu data GPS…</p>
+        <p id="lastValidGpsText" style="margin-top:-6px; font-size:12px; color:#6b7280;">Last valid GPS: -</p>
+        <div style="margin-bottom:12px;"><a id="gpsLink" href="#" target="_blank" rel="noopener noreferrer" style="display:none; color:#2563eb; text-decoration:underline; font-size:14px; font-weight:600;">Open in Google Maps</a></div>
+        <div id="leafletMap"></div>
+      </div>
+
+      <!-- STATUS CARDS -->
+      <div class="section-label">Status Terkini</div>
+      <div class="grid status-grid">
+        <div class="card">
+          <h3>Vibration Level</h3>
+          <div class="value" id="vibration">–</div>
+        </div>
+        <div class="card">
+          <h3>Vibration Warning</h3>
+          <div id="warningWrap"><span class="badge badge-gray">–</span></div>
+        </div>
+        <div class="card">
+          <h3>Relay State</h3>
+          <div id="relayWrap"><span class="badge badge-gray">–</span></div>
+        </div>
+        <div class="card">
+          <h3>Buzzer State</h3>
+          <div id="buzzerWrap"><span class="badge badge-gray">–</span></div>
+        </div>
+        <div class="card">
+          <h3>Vehicle Mode</h3>
+          <div id="modeWrap"><span class="badge badge-gray">–</span></div>
+        </div>
+        <div class="card">
+          <h3>Satellites</h3>
+          <div class="value" id="satellites">–</div>
+        </div>
+        <div class="card">
+          <h3>Strong Trigger Count</h3>
+          <div class="value" id="strong">–</div>
+        </div>
+        <div class="card">
+          <h3>Uptime</h3>
+          <div class="value" id="uptime" style="font-size:18px;">–</div>
+        </div>
+        <div class="card">
+          <h3>GPS Status</h3>
+          <div id="gpsStatusWrap"><span class="badge badge-gray">–</span></div>
+        </div>
+        <div class="card">
+          <h3>Latitude</h3>
+          <div class="value" id="latitude" style="font-size:16px;">–</div>
+        </div>
+        <div class="card">
+          <h3>Longitude</h3>
+          <div class="value" id="longitude" style="font-size:16px;">–</div>
+        </div>
+        <div class="card">
+          <h3>Last Update</h3>
+          <div class="value" id="lastUpdate" style="font-size:13px;line-height:1.5;">–</div>
+        </div>
+      </div>
+
+      <!-- REMOTE CONTROL -->
+      <div class="section-label">Remote Control</div>
+      <div class="rc-grid">
+        <div class="rc-group">
+          <h4>Buzzer</h4>
+          <div class="rc-btn-row">
+            <button class="btn-cmd btn-red" id="btnBuzzerAlert" onclick="sendCommand('buzzer','ALERT')">Alert</button>
+            <button class="btn-cmd btn-gray" id="btnBuzzerStop" onclick="sendCommand('buzzer','STOP')">Stop</button>
+          </div>
+        </div>
+
+        <div class="rc-group">
+          <h4>Relay</h4>
+          <div class="rc-btn-row">
+            <button class="btn-cmd btn-green" id="btnRelayOn" onclick="sendCommand('relay','ON')">ON</button>
+            <button class="btn-cmd btn-orange" id="btnRelayOff" onclick="sendCommand('relay','OFF')">OFF</button>
+          </div>
+          <div class="relay-safety-status" id="relaySafetyStatus" aria-live="polite"></div>
+        </div>
+
+        <div class="rc-group">
+          <h4>Mode Kendaraan</h4>
+          <div class="rc-btn-row">
+            <button class="btn-cmd btn-blue" id="btnModeRiding" onclick="sendCommand('mode','RIDING')">Normal Mode</button>
+            <button class="btn-cmd btn-yellow" id="btnModeParked" onclick="sendCommand('mode','PARKED')">Thief Mode</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- REALTIME CHARTS -->
+    <div class="right-panel realtime-panel">
+      <div class="section-label">Grafik Realtime Live (30 Data Terakhir)</div>
+      <div class="chart-grid">
+        <div class="chart-card">
+          <h3><span class="dot" style="background:#0f8a4b;"></span>Vibration Level</h3>
+          <div class="chart-wrap"><canvas id="chartVibration"></canvas></div>
+        </div>
+
+        <div class="chart-card">
+          <h3><span class="dot" style="background:#2563eb;"></span>Satellites</h3>
+          <div class="chart-wrap"><canvas id="chartSatellites"></canvas></div>
+        </div>
+
+        <div class="chart-card">
+          <h3><span class="dot" style="background:#dc2626;"></span>Strong Trigger Count</h3>
+          <div class="chart-wrap"><canvas id="chartStrong"></canvas></div>
+        </div>
+
+        <div class="chart-card">
+          <h3><span class="dot" style="background:#7c3aed;"></span>GPS Speed (km/h)</h3>
+          <div class="chart-wrap"><canvas id="chartSpeed"></canvas></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart Gabungan 4 Garis -->
+  <div class="section-label">Grafik Gabungan - Vibration · Satellites · Trigger · Speed</div>
+  <div class="chart-card" style="margin-top:0;">
+    <h3>
+      <span class="dot" style="background:#0f8a4b;"></span>Vibration
+      &nbsp;<span class="dot" style="background:#2563eb;"></span>Satellites
+      &nbsp;<span class="dot" style="background:#dc2626;"></span>Strong Trigger
+      &nbsp;<span class="dot" style="background:#7c3aed;"></span>GPS Speed
+    </h3>
+    <div class="chart-wrap" style="height:240px;"><canvas id="chartCombined"></canvas></div>
+  </div>
+
+  <div class="section-label">Sensor Data Log</div>
+  <div class="data-log-card">
+    <div>
+      <h3>Riwayat Data MQTT</h3>
+      <p><span id="dataLogCount">0</span> data tersimpan di browser</p>
+    </div>
+    <div class="data-log-actions">
+      <button class="btn-log btn-green" type="button" onclick="downloadCSV()">Download CSV</button>
+      <button class="btn-log btn-blue" type="button" onclick="downloadExcel()">Download Excel</button>
+      <button class="btn-log btn-red" type="button" onclick="clearDataLog()">Clear Log</button>
+    </div>
+  </div>
+
+  <div class="footer">
+    Vehicle Security Dashboard &nbsp;·&nbsp; ESP32 + HiveMQ MQTT
+  </div>
+</div>
+
+<!-- Toast notifikasi -->
+<div id="toast"></div>
+
+<script>
+  // ════════════════════════════════════════════════
+  //  KONFIGURASI MQTT
+  // ════════════════════════════════════════════════
+  const MQTT_URL      = 'wss://3a719ac26229407daf604b0d45ef4f16.s1.eu.hivemq.cloud:8884/mqtt';
+  const MQTT_USERNAME = 'esp32_vehicle';
+  const MQTT_PASSWORD = 'Sulthan2005.';
+  const TOPIC_DATA    = 'sulthan/vehicle/security/latest';
+  const TOPIC_CMD     = 'sulthan/vehicle/security/command';
+  const LOG_STORAGE_KEY = 'vehicleSecurityDataLog';
+  const MAX_LOG_ROWS = 10000;
+  const LOG_COLUMNS = [
+    ['timestamp', 'Timestamp'],
+    ['vibrationLevel', 'Vibration Level'],
+    ['vibrationWarning', 'Vibration Warning'],
+    ['relayState', 'Relay State'],
+    ['buzzerState', 'Buzzer State'],
+    ['vehicleMode', 'Vehicle / Security Mode'],
+    ['satellites', 'Satellites'],
+    ['gpsStatus', 'GPS Status'],
+    ['latitude', 'Latitude'],
+    ['longitude', 'Longitude'],
+    ['speedKmph', 'GPS Speed km/h'],
+    ['strongTriggerCount', 'Strong Trigger Count'],
+    ['uptime', 'Uptime'],
+    ['lastCommandStatus', 'Last Command Status']
+  ];
+  const MAX_BUFFER    = 10; // titik maksimal di chart (30–60 data)
+
+  // ════════════════════════════════════════════════
+  //  STATE
+  // ════════════════════════════════════════════════
+  let mqttClient   = null;
+  let msgCount     = 0;
+  let currentVehicleMode = null;
+  let leafletMap   = null;
+  let vehicleMarker = null;
+  let mapInitialized = false;
+  let lastMapLat   = null;
+  let lastMapLng   = null;
+  let lastValidLatitude = null;
+  let lastValidLongitude = null;
+  let lastValidGpsTime = null;
+  let dataLog = [];
+
+  // Rolling buffer untuk chart
+  const buf = {
+    labels  : [],
+    vibration: [],
+    satellites: [],
+    strong  : []
+  };
+
+  // ════════════════════════════════════════════════
+  //  CHART INSTANCES
+  // ════════════════════════════════════════════════
+  let chartVibration  = null;
+  let chartSatellites = null;
+  let chartStrong     = null;
+  let chartSpeed      = null;
+
+  // ════════════════════════════════════════════════
+  //  HELPER: format waktu HH:MM:SS
+  // ════════════════════════════════════════════════
+  function nowTime() {
+    const d = new Date();
+    return [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map(v => String(v).padStart(2, '0')).join(':');
+  }
+
+  // ════════════════════════════════════════════════
+  //  HELPER: toast notifikasi
+  // ════════════════════════════════════════════════
+  let toastTimer = null;
+  function showToast(msg, isError = false) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.background = isError ? '#dc2626' : '#0f8a4b';
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  }
+
+  // ════════════════════════════════════════════════
+  //  UPDATE MQTT STATUS BADGE
+  // ════════════════════════════════════════════════
+  function updateDataLogCount() {
+    const countElement = document.getElementById('dataLogCount');
+    if (countElement) countElement.textContent = dataLog.length;
+  }
+
+  function loadDataLog() {
+    try {
+      const storedLog = localStorage.getItem(LOG_STORAGE_KEY);
+      const parsedLog = storedLog ? JSON.parse(storedLog) : [];
+      dataLog = Array.isArray(parsedLog)
+        ? parsedLog.slice(-MAX_LOG_ROWS)
+        : [];
+    } catch (error) {
+      console.error('[Data Log] Gagal membaca localStorage:', error);
+      dataLog = [];
+    }
+
+    updateDataLogCount();
+  }
+
+  function saveDataLog() {
+    if (dataLog.length > MAX_LOG_ROWS) {
+      dataLog = dataLog.slice(-MAX_LOG_ROWS);
+    }
+
+    try {
+      localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(dataLog));
+    } catch (error) {
+      console.error('[Data Log] Gagal menyimpan localStorage:', error);
+    }
+
+    updateDataLogCount();
+  }
+
+  function logSensorData(d, context) {
+    const timestamp = new Date().toLocaleString('id-ID', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+
+    const lastRow = dataLog[dataLog.length - 1];
+    if (lastRow && lastRow.timestamp === timestamp) return;
+
+    const vehicleMode =
+      d.vehicleModeText ||
+      d.securityMode ||
+      (Number(d.vehicleMode) === 1 ? 'RIDING' : 'PARKED');
+
+    dataLog.push({
+      timestamp,
+      vibrationLevel: Number(d.vibrationLevel || 0),
+      vibrationWarning: d.vibrationWarning ? 'WARNING' : 'NORMAL',
+      relayState: d.relayState ? 'ON' : 'OFF',
+      buzzerState: d.buzzerState ? 'ON' : 'OFF',
+      vehicleMode,
+      satellites: Number(d.satellites || 0),
+      gpsStatus: context.gpsLock ? 'LOCK' : 'NO LOCK',
+      latitude: context.hasDisplayLocation ? context.displayLat : '',
+      longitude: context.hasDisplayLocation ? context.displayLng : '',
+      speedKmph: context.safeSpeed,
+      strongTriggerCount: Number(d.strongTriggerCount || 0),
+      uptime: d.uptime ?? '',
+      lastCommandStatus: d.lastCommandStatus || ''
+    });
+
+    saveDataLog();
+  }
+
+  function getExportRows() {
+    return dataLog.map(row => {
+      const exportRow = {};
+      LOG_COLUMNS.forEach(([key, header]) => {
+        exportRow[header] = row[key] ?? '';
+      });
+      return exportRow;
+    });
+  }
+
+  function downloadCSV() {
+    if (dataLog.length === 0) {
+      showToast('Belum ada data untuk diekspor', true);
+      return;
+    }
+
+    const escapeCSV = value =>
+      `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const header = LOG_COLUMNS.map(([, label]) => escapeCSV(label)).join(',');
+    const rows = dataLog.map(row =>
+      LOG_COLUMNS.map(([key]) => escapeCSV(row[key])).join(',')
+    );
+    const csvContent = `sep=,\r\n${header}\r\n${rows.join('\r\n')}`;
+    const blob = new Blob(['\uFEFF', csvContent], {
+      type: 'text/csv;charset=utf-8;'
+    });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    link.href = downloadUrl;
+    link.download = 'vehicle-security-log.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
+    showToast(`${dataLog.length} data berhasil diekspor ke CSV`);
+  }
+
+  function downloadExcel() {
+    if (dataLog.length === 0) {
+      showToast('Belum ada data untuk diekspor', true);
+      return;
+    }
+
+    if (typeof XLSX === 'undefined') {
+      showToast('Library Excel belum berhasil dimuat', true);
+      return;
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(getExportRows());
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Vehicle Security Log');
+    XLSX.writeFile(workbook, 'vehicle-security-log.xlsx');
+    showToast(`${dataLog.length} data berhasil diekspor ke Excel`);
+  }
+
+  function clearDataLog() {
+    if (
+      dataLog.length > 0 &&
+      !window.confirm('Hapus seluruh data log yang tersimpan?')
+    ) {
+      return;
+    }
+
+    dataLog = [];
+
+    try {
+      localStorage.removeItem(LOG_STORAGE_KEY);
+    } catch (error) {
+      console.error('[Data Log] Gagal menghapus localStorage:', error);
+    }
+
+    updateDataLogCount();
+    showToast('Data log berhasil dihapus');
+  }
+
+  function setMqttStatus(state) {
+    const badge = document.getElementById('mqttBadge');
+    const dot   = document.getElementById('statusDot');
+    const text  = document.getElementById('mqttStatusText');
+
+    badge.className = 'mqtt-badge ' + state;
+
+    const map = {
+      connecting   : { label: 'Connecting…',  blink: true  },
+      connected    : { label: 'Connected',    blink: false },
+      reconnecting : { label: 'Reconnecting…', blink: true },
+      error        : { label: 'Error',         blink: true  }
+    };
+
+    const cfg = map[state] || map.connecting;
+    text.textContent = cfg.label;
+    dot.className    = 'status-dot' + (cfg.blink ? ' blink' : '');
+
+    // Disable tombol kalau tidak connected
+    const disabled = (state !== 'connected');
+    document.querySelectorAll('.btn-cmd').forEach(b => b.disabled = disabled);
+  }
+
+  // ════════════════════════════════════════════════
+  //  BUILD / UPDATE CHART  (append mode)
+  // ════════════════════════════════════════════════
+  function initChart(canvasId, color, label, yConfig = {}) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, 190);
+    gradient.addColorStop(0, color + '40');
+    gradient.addColorStop(1, color + '00');
+
+    return new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: label,
+          data: [],
+          borderColor: color,
+          backgroundColor: gradient,
+          borderWidth: 2.2,
+          pointBackgroundColor: color,
+          pointRadius: 2.5,
+          pointHoverRadius: 5,
+          fill: true,
+          tension: 0.35
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: items => items[0].label,
+              label: item  => `${label}: ${item.parsed.y}`
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: {
+              font: { size: 9 },
+              maxTicksLimit: 8,
+              maxRotation: 45,
+              minRotation: 45
+            },
+            grid: {
+              display: true,
+              color: 'rgba(0,0,0,0.05)',
+              lineWidth: 1
+            }
+          },
+          y: {
+            ...yConfig,
+            ticks: {
+              font: { size: 9 },
+              ...(yConfig.ticks || {})
+            },
+            grid: {
+              display: true,
+              color: 'rgba(0,0,0,0.06)',
+              lineWidth: 1
+            }
+          }
+        }
+      }
+    });
+  }
+  function pushToChart(chart, label, value, datasetIndex = 0) {
+    if (datasetIndex === 0) {
+      chart.data.labels.push(label);
+      // trim semua dataset sekaligus kalau label sudah melebihi buffer
+      if (chart.data.labels.length > MAX_BUFFER) {
+        chart.data.labels.shift();
+        chart.data.datasets.forEach(ds => ds.data.shift());
+      }
+    }
+    chart.data.datasets[datasetIndex].data.push(value);
+    chart.update('none'); // animation:false + update('none') = zero-cost render
+    console.log(`[Chart] updated dataset[${datasetIndex}] label=${label} value=${value}`);
+  }
+
+  // Khusus chart gabungan (multi-dataset, label shared)
+  function pushCombined(label, vib, sat, stc, speed) {
+    chartCombined.data.labels.push(label);
+    if (chartCombined.data.labels.length > MAX_BUFFER) {
+      chartCombined.data.labels.shift();
+      chartCombined.data.datasets.forEach(ds => ds.data.shift());
+    }
+    chartCombined.data.datasets[0].data.push(vib);
+    chartCombined.data.datasets[1].data.push(sat);
+    chartCombined.data.datasets[2].data.push(stc);
+    chartCombined.data.datasets[3].data.push(speed);
+    chartCombined.update('none');
+    console.log(
+      `[Chart] Combined updated | vib=${vib} sat=${sat} stc=${stc} speed=${speed}`
+    );
+  }
+
+  // ════════════════════════════════════════════════
+  //  LEAFLET MAP (dibuat satu kali, tanpa reload)
+  // ════════════════════════════════════════════════
+  function initLeafletMap() {
+    if (mapInitialized) return;
+
+    leafletMap = L.map('leafletMap').setView([-7.2575, 112.7521], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(leafletMap);
+
+    vehicleMarker = L.marker([-7.2575, 112.7521])
+      .addTo(leafletMap)
+      .bindPopup('Vehicle Location');
+
+    mapInitialized = true;
+  }
+
+  function updateLeafletMap(lat, lng, gpsLock) {
+    if (!mapInitialized) initLeafletMap();
+
+    if (!gpsLock || !Number.isFinite(lat) || !Number.isFinite(lng) ||
+        lat === 0 || lng === 0) {
+      return;
+    }
+
+    const pos = [lat, lng];
+    vehicleMarker.setLatLng(pos);
+
+    const firstPosition = lastMapLat === null || lastMapLng === null;
+    const movedEnough = !firstPosition &&
+      leafletMap.distance([lastMapLat, lastMapLng], pos) >= 5;
+
+    if (firstPosition || movedEnough) {
+      leafletMap.setView(pos, 16);
+      lastMapLat = lat;
+      lastMapLng = lng;
+    }
+
+    vehicleMarker.bindPopup(
+      `Vehicle Location<br>Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}`
+    );
+  }
+
+  // ════════════════════════════════════════════════
+  //  UPDATE UI DARI PAYLOAD MQTT
+  // ════════════════════════════════════════════════
+  function updateUI(d) {
+    const t = nowTime();
+    const rawLat = Number(d.latitude || 0);
+    const rawLng = Number(d.longitude || 0);
+    const gpsLock = d.gpsLock === true;
+    const gpsValid =
+      gpsLock &&
+      Number.isFinite(rawLat) &&
+      Number.isFinite(rawLng) &&
+      rawLat !== 0 &&
+      rawLng !== 0;
+
+    if (gpsValid) {
+      lastValidLatitude = rawLat;
+      lastValidLongitude = rawLng;
+      lastValidGpsTime = new Date().toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    }
+
+    const displayLat = lastValidLatitude !== null ? lastValidLatitude : rawLat;
+    const displayLng = lastValidLongitude !== null ? lastValidLongitude : rawLng;
+    let speedKmph = Number(d.speedKmph || 0);
+
+    if (!Number.isFinite(speedKmph)) {
+      speedKmph = 0;
+    }
+
+    if (!gpsLock || speedKmph < 3) {
+      speedKmph = 0;
+    }
+
+    const safeSpeed = speedKmph;
+    const hasDisplayLocation =
+      lastValidLatitude !== null && lastValidLongitude !== null;
+
+    logSensorData(d, {
+      gpsLock,
+      displayLat: hasDisplayLocation ? Number(displayLat.toFixed(6)) : '',
+      displayLng: hasDisplayLocation ? Number(displayLng.toFixed(6)) : '',
+      hasDisplayLocation,
+      safeSpeed
+    });
+
+    // Nilai numerik
+    document.getElementById('vibration').textContent  = parseFloat(d.vibrationLevel).toFixed(2);
+    document.getElementById('satellites').textContent = d.satellites;
+    document.getElementById('strong').textContent     = d.strongTriggerCount;
+    document.getElementById('latitude').textContent =
+      lastValidLatitude !== null ? displayLat.toFixed(6) : '-';
+    document.getElementById('longitude').textContent =
+      lastValidLongitude !== null ? displayLng.toFixed(6) : '-';
+    document.getElementById('uptime').textContent     = fmtUptime(d.uptime);
+    document.getElementById('lastUpdate').textContent = t;
+
+    // Vibration Warning
+    document.getElementById('warningWrap').innerHTML = d.vibrationWarning
+      ? '<span class="badge badge-red">WARNING</span>'
+      : '<span class="badge badge-green">NORMAL</span>';
+
+    // Relay State
+    document.getElementById('relayWrap').innerHTML = d.relayState
+      ? '<span class="badge badge-green">ON</span>'
+      : '<span class="badge badge-gray">OFF</span>';
+
+    // Buzzer State
+    document.getElementById('buzzerWrap').innerHTML = d.buzzerState
+      ? '<span class="badge badge-red">ACTIVE</span>'
+      : '<span class="badge badge-gray">OFF</span>';
+
+    // Vehicle Mode
+    currentVehicleMode = Number(d.vehicleMode) === 1 ? 1 : 0;
+    document.getElementById('modeWrap').innerHTML = d.vehicleMode
+      ? '<span class="badge badge-blue">RIDING</span>'
+      : '<span class="badge badge-orange">PARKED</span>';
+
+    if (currentVehicleMode === 0) {
+      setRelaySafetyStatus('');
+    }
+
+    // GPS Status + Leaflet Map
+    const gpsLink = document.getElementById('gpsLink');
+    const lastValidGpsText = document.getElementById('lastValidGpsText');
+
+    if (gpsValid) {
+      updateLeafletMap(rawLat, rawLng, true);
+    }
+
+    if (gpsValid) {
+      document.getElementById('gpsStatusWrap').innerHTML =
+        '<span class="badge badge-green">LOCK</span>';
+      document.getElementById('gpsText').textContent =
+        `Latitude: ${displayLat.toFixed(6)}, Longitude: ${displayLng.toFixed(6)}, Satellites: ${d.satellites}`;
+    } else if (lastValidLatitude !== null && lastValidLongitude !== null) {
+      document.getElementById('gpsStatusWrap').innerHTML =
+        '<span class="badge badge-gray">NO LOCK - showing last location</span>';
+      document.getElementById('gpsText').textContent =
+        `Latitude: ${displayLat.toFixed(6)}, Longitude: ${displayLng.toFixed(6)}, Satellites: ${d.satellites}`;
+    } else {
+      document.getElementById('gpsStatusWrap').innerHTML =
+        '<span class="badge badge-gray">NO LOCK</span>';
+      document.getElementById('gpsText').textContent =
+        'GPS belum lock / menunggu sinyal satelit';
+    }
+
+    if (lastValidGpsText) {
+      lastValidGpsText.textContent =
+        `Last valid GPS: ${lastValidGpsTime !== null ? lastValidGpsTime : '-'}`;
+    }
+
+    if (gpsLink && lastValidLatitude !== null && lastValidLongitude !== null) {
+      gpsLink.href = gpsValid && d.googleMapsUrl
+        ? d.googleMapsUrl
+        : `https://maps.google.com/maps?q=${lastValidLatitude},${lastValidLongitude}`;
+      gpsLink.style.display = 'inline-block';
+    } else if (gpsLink) {
+      gpsLink.style.display = 'none';
+    }
+
+    // Push ke masing-masing chart individual
+    pushToChart(chartVibration,  t, parseFloat(d.vibrationLevel));
+    pushToChart(chartSatellites, t, parseInt(d.satellites));
+    pushToChart(chartStrong,     t, parseInt(d.strongTriggerCount));
+    pushToChart(chartSpeed,      t, safeSpeed);
+
+    // Push ke chart gabungan
+    pushCombined(t,
+      parseFloat(d.vibrationLevel),
+      parseInt(d.satellites),
+      parseInt(d.strongTriggerCount),
+      safeSpeed
+    );
+
+    console.log('[Chart] All charts updated at', t);
+  }
+
+  // format uptime detik → jam:menit:detik
+  function fmtUptime(sec) {
+    const s = parseInt(sec) || 0;
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    if (h > 0) return `${h}j ${m}m ${ss}d`;
+    if (m > 0) return `${m}m ${ss}d`;
+    return `${ss}d`;
+  }
+
+  // ════════════════════════════════════════════════
+  //  KIRIM COMMAND KE ESP32
+  // ════════════════════════════════════════════════
+  function setRelaySafetyStatus(message) {
+    const status = document.getElementById('relaySafetyStatus');
+    if (status) status.textContent = message;
+  }
+
+  function sendCommand(type, value) {
+    if (!mqttClient || !mqttClient.connected) {
+      showToast('MQTT belum terhubung!', true);
+      console.warn('[MQTT] sendCommand gagal: client tidak connected');
+      return;
+    }
+
+    if (type === 'relay' && value === 'OFF' && currentVehicleMode === 1) {
+      const message = 'Relay OFF blocked while RIDING for safety';
+      setRelaySafetyStatus(message);
+      showToast(message, true);
+      console.warn('[SAFETY]', message);
+      return;
+    }
+
+    const payload = JSON.stringify({ type, value });
+
+    mqttClient.publish(TOPIC_CMD, payload, { qos: 1 }, (err) => {
+      if (err) {
+        console.error('[MQTT] Command publish error:', err);
+        showToast(`Gagal kirim: ${type}/${value}`, true);
+      } else {
+        console.log(`[MQTT] Command sent → topic: ${TOPIC_CMD} | payload: ${payload}`);
+        const displayValue = type === 'mode'
+          ? (value === 'RIDING' ? 'Normal Mode' : 'Thief Mode')
+          : value;
+        showToast(`Command dikirim: ${type} = ${displayValue}`);
+
+        if (type === 'relay' && value === 'ON') {
+          setRelaySafetyStatus('');
+        }
+      }
+    });
+  }
+
+  // ════════════════════════════════════════════════
+  //  INISIALISASI MQTT
+  // ════════════════════════════════════════════════
+  function initMQTT() {
+    console.log('[MQTT] Connecting to:', MQTT_URL);
+    setMqttStatus('connecting');
+
+    const clientId = 'WebDashboard-' + Math.random().toString(16).slice(2, 8);
+
+    mqttClient = mqtt.connect(MQTT_URL, {
+      clientId  : clientId,
+      username  : MQTT_USERNAME,
+      password  : MQTT_PASSWORD,
+      clean     : true,
+      reconnectPeriod: 4000,
+      connectTimeout : 15000,
+      keepalive : 30
+    });
+
+    // ── Connected ──
+    mqttClient.on('connect', () => {
+      console.log('[MQTT] Connected. ClientID:', clientId);
+      setMqttStatus('connected');
+      showToast('MQTT Connected ke HiveMQ');
+
+      mqttClient.subscribe(TOPIC_DATA, { qos: 1 }, (err, granted) => {
+        if (err) {
+          console.error('[MQTT] Subscribe error:', err);
+        } else {
+          console.log('[MQTT] Subscribed to:', TOPIC_DATA, '| granted:', granted);
+        }
+      });
+    });
+
+    // ── Message received ──
+    mqttClient.on('message', (topic, message) => {
+      const raw = message.toString();
+      console.log('[MQTT] Message received | topic:', topic, '| payload:', raw);
+
+      if (topic !== TOPIC_DATA) return;
+
+      try {
+        const data = JSON.parse(raw);
+        msgCount++;
+        document.getElementById('msgCounter').textContent = `${msgCount} pesan`;
+        updateUI(data);
+      } catch (e) {
+        console.error('[MQTT] JSON parse error:', e, '| raw:', raw);
+      }
+    });
+
+    // ── Reconnecting ──
+    mqttClient.on('reconnect', () => {
+      console.log('[MQTT] Reconnecting…');
+      setMqttStatus('reconnecting');
+    });
+
+    // ── Error ──
+    mqttClient.on('error', (err) => {
+      console.error('[MQTT] Error:', err);
+      setMqttStatus('error');
+      showToast('MQTT Error: ' + err.message, true);
+    });
+
+    // ── Offline ──
+    mqttClient.on('offline', () => {
+      console.warn('[MQTT] Client offline.');
+      setMqttStatus('reconnecting');
+    });
+
+    // ── Close ──
+    mqttClient.on('close', () => {
+      console.warn('[MQTT] Connection closed.');
+    });
+  }
+
+  // ════════════════════════════════════════════════
+  //  INIT CHARTS → lalu init MQTT
+  // ════════════════════════════════════════════════
+  chartVibration = initChart('chartVibration', '#0f8a4b', 'Vibration Level', {
+  min: 0.0,
+  max: 2.0
+});
+
+chartSatellites = initChart('chartSatellites', '#2563eb', 'Satellites', {
+  min: 0,
+  max: 12,
+  ticks: {
+    stepSize: 1
+  }
+});
+
+chartStrong = initChart('chartStrong', '#dc2626', 'Strong Trigger Count', {
+  beginAtZero: true
+});
+
+chartSpeed = initChart('chartSpeed', '#7c3aed', 'GPS Speed (km/h)', {
+  beginAtZero: true,
+  min: 0,
+  title: {
+    display: true,
+    text: 'km/h',
+    font: { size: 9 }
+  }
+});
+
+  // Chart gabungan (multi-dataset)
+  let chartCombined = (function() {
+    const ctx = document.getElementById('chartCombined').getContext('2d');
+    const mkGrad = (color) => {
+      const g = ctx.createLinearGradient(0, 0, 0, 240);
+      g.addColorStop(0, color + '30');
+      g.addColorStop(1, color + '00');
+      return g;
+    };
+    return new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'Vibration Level',
+            data: [],
+            borderColor: '#0f8a4b',
+            backgroundColor: mkGrad('#0f8a4b'),
+            borderWidth: 2,
+            pointRadius: 2,
+            fill: true,
+            tension: 0.35,
+            yAxisID: 'yVib'
+          },
+          {
+            label: 'Satellites',
+            data: [],
+            borderColor: '#2563eb',
+            backgroundColor: mkGrad('#2563eb'),
+            borderWidth: 2,
+            pointRadius: 2,
+            fill: false,
+            tension: 0.35,
+            yAxisID: 'ySat'
+          },
+          {
+            label: 'Strong Trigger',
+            data: [],
+            borderColor: '#dc2626',
+            backgroundColor: mkGrad('#dc2626'),
+            borderWidth: 2,
+            pointRadius: 2,
+            fill: false,
+            tension: 0.35,
+            yAxisID: 'yStc'
+          },
+          {
+            label: 'GPS Speed',
+            data: [],
+            borderColor: '#7c3aed',
+            backgroundColor: 'rgba(124, 58, 237, 0.12)',
+            borderWidth: 2,
+            pointRadius: 2,
+            fill: false,
+            tension: 0.35,
+            yAxisID: 'ySpeed'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: { font: { size: 10 }, boxWidth: 10, padding: 12 }
+          },
+          tooltip: {
+            callbacks: { title: items => items[0].label }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { font: { size: 9 }, maxTicksLimit: 8, maxRotation: 45, minRotation: 45 },
+            grid: {
+              display: true,
+              color: 'rgba(0,0,0,0.05)',
+              lineWidth: 1
+            }
+          },
+          yVib: {
+            type: 'linear',
+            position: 'left',   
+            min: 0.0,
+            max: 2.0,
+            title: { display: true, text: 'Vib', font: { size: 9 } },
+            ticks: { font: { size: 9 } },
+            grid: {
+              display: true,
+              color: 'rgba(0,0,0,0.06)',
+              lineWidth: 1
+            }
+          },
+          ySat: {
+            type: 'linear',
+            position: 'right',
+            min: 0,
+            max: 12,
+            title: { display: true, text: 'Sat', font: { size: 9 } },
+            ticks: { font: { size: 9 }, stepSize: 1 },
+            grid: { display: false }
+          },
+          yStc: {
+            type: 'linear', position: 'right',
+            title: { display: true, text: 'STC', font: { size: 9 } },
+            ticks: { font: { size: 9 } },
+            grid: { display: false },
+            offset: true
+          },
+          ySpeed: {
+            type: 'linear',
+            position: 'right',
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: 'Speed km/h',
+              font: { size: 9 }
+            },
+            ticks: { font: { size: 9 } },
+            grid: {
+              drawOnChartArea: false
+            }
+          }
+        }
+      }
+    });
+  })();
+
+  // Disable semua tombol command sampai MQTT connected
+  document.querySelectorAll('.btn-cmd').forEach(b => b.disabled = true);
+
+  // Muat kembali log sensor sebelum data MQTT baru masuk.
+  loadDataLog();
+
+  // Buat map satu kali saat halaman dibuka.
+  initLeafletMap();
+
+  // Start MQTT
+  initMQTT();
+</script>
+</body>
+</html>
